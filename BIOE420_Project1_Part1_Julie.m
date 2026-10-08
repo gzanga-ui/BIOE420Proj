@@ -90,7 +90,7 @@ end
 
 %% Display Full Crystal Sinogram (0-360 degrees)
 
-figure('Position', [100, 100, 1200, 500]);
+figure;
 
 imagesc(angles, 1:Nx, sinogram);
 
@@ -184,7 +184,7 @@ title('Crystal Cross-Section - Filtered Back Projection');
 
 %% Display Crystal Results Side by Side
 
-figure('Position', [100, 100, 1400, 600]);
+figure;
 
 subplot(1,2,1);
 
@@ -212,87 +212,195 @@ ylabel('Y Position');
 title('Crystal Reconstructed Slice');
 
 
-%% =========================================================
-% EXERCISE 2: INSECT HEAD DATASET
-% ==========================================================
+%% Step 1: Load Insect Head Dataset
 
-% Unzip insect head dataset
-unzip('Dataset_Insect_Head_360.zip', 'Insect Head Images');
+zipFile = 'Dataset_Insect_Head_360.zip';
+outputFolder = 'Insect Head Images';
 
-% Find BMP files in subfolders
-files2 = dir(fullfile('Insect Head Images', '**', '*.bmp'));
-
-if isempty(files2)
-    error('No BMP images found for Insect Head dataset.');
+% Only unzip if the folder does not already exist
+if ~isfolder(outputFolder)
+    unzip(zipFile, outputFolder);
 end
 
-%% Sort images by projection angle
+% Find TIFF images in all subfolders
+files = [ ...
+    dir(fullfile(outputFolder, '**', '*.tif')); ...
+    dir(fullfile(outputFolder, '**', '*.tiff'))];
 
-angles2 = zeros(length(files2), 1);
+if isempty(files)
+    error('No TIFF images found. Check the dataset folder.');
+end
 
-for k = 1:length(files2)
+fprintf('Found %d TIFF files.\n', length(files));
 
-    token = regexp(files2(k).name, ...
-        '(\d+\.?\d*)\.bmp$', 'tokens');
+%% Step 2: Extract Angles from Filenames
+
+angles = [];
+validFiles = files([]);
+
+for k = 1:length(files)
+
+    name = files(k).name;
+
+    % Handles filenames such as:
+    % 202009231201PM49_ -0.0.tif
+    % 202009231202PM05_ 2.0 - Copy.tif
+    % 202009231202PM05_ 4.0.tif
+
+    token = regexp(name, ...
+        '_\s*([+-]?\d+\.?\d*)\s*(?:-\s*Copy)?\.tiff?$', ...
+        'tokens', 'once', 'ignorecase');
 
     if isempty(token)
-        error('Cannot extract angle from %s', files2(k).name);
+        fprintf('Skipping invalid filename: %s\n', name);
+        continue;
     end
 
-    angles2(k) = str2double(token{1}{1});
+    angle = str2double(token{1});
 
-end
-
-[angles2, order2] = sort(angles2);
-files2 = files2(order2);
-
-% Keep all angles from 0 to 358 degrees
-use2 = (angles2 >= 0) & (angles2 < 360);
-
-angles2 = angles2(use2);
-files2 = files2(use2);
-
-%% Read first image
-
-img2 = imread(fullfile(files2(1).folder, files2(1).name));
-
-if size(img2, 3) == 3
-    img2 = rgb2gray(img2);
-end
-
-img2 = double(img2);
-
-[Ny2, Nx2] = size(img2);
-
-% Center position for insect head
-x02 = round(Nx2/2);
-y02 = round(Ny2/2);
-
-%% Create Insect Head Sinogram (0-358 degrees)
-
-Nproj2 = length(angles2);
-sinogram2 = zeros(Nx2, Nproj2);
-
-for k = 1:Nproj2
-
-    img2 = imread(fullfile(files2(k).folder, files2(k).name));
-
-    if size(img2, 3) == 3
-        img2 = rgb2gray(img2);
+    if ~isfinite(angle)
+        fprintf('Skipping invalid angle: %s\n', name);
+        continue;
     end
 
-    img2 = double(img2);
+    % Convert negative angles to 0-360 degrees
+    angle = mod(angle, 360);
 
-    % Extract horizontal line
-    sinogram2(:, k) = img2(y02, :)';
+    angles(end+1, 1) = angle;
+    validFiles(end+1, 1) = files(k);
 
 end
 
-%% Display Full Insect Head Sinogram (0-360 degrees)
+if isempty(validFiles)
+    error('No valid projection filenames found.');
+end
 
-figure('Position', [100, 100, 1200, 500]);
+%% Step 3: Sort Images and Remove Duplicate Angles
 
-imagesc(angles2, 1:Nx2, sinogram2);
+[angles, order] = sort(angles);
+files = validFiles(order);
+
+% Prefer original files over "- Copy" files
+isCopy = contains({files.name}, '- Copy', 'IgnoreCase', true);
+[~, priorityOrder] = sort(isCopy);
+
+angles = angles(priorityOrder);
+files = files(priorityOrder);
+
+% Remove duplicate angles
+[angles, uniqueIdx] = unique(angles, 'stable');
+files = files(uniqueIdx);
+
+% Sort again by angle
+[angles, order] = sort(angles);
+files = files(order);
+
+fprintf('Found %d unique projection angles.\n', length(angles));
+fprintf('Angle range: %.1f to %.1f degrees.\n', ...
+    min(angles), max(angles));
+
+%% Step 4: Find First Readable Image
+
+firstValid = [];
+
+for k = 1:length(files)
+
+    try
+        img = imread(fullfile(files(k).folder, files(k).name));
+
+        if size(img, 3) == 3
+            img = rgb2gray(img);
+        end
+
+        firstValid = k;
+        break;
+
+    catch ME
+        fprintf('Cannot read: %s\n', files(k).name);
+        fprintf('Reason: %s\n', ME.message);
+    end
+
+end
+
+if isempty(firstValid)
+    error('No readable TIFF images found.');
+end
+
+img = double(img);
+
+[Ny, Nx] = size(img);
+
+fprintf('Image dimensions: %d x %d pixels.\n', Ny, Nx);
+
+%% Step 5: Define Cross-Section Position
+
+% Use center of insect head image
+x0 = round(Nx/2);
+y0 = round(Ny/2);
+
+fprintf('Selected center: (%d, %d)\n', x0, y0);
+
+%% Step 6: Create Sinogram
+
+Nproj = length(angles);
+
+% Rows = detector positions
+% Columns = projection angles
+sinogram = zeros(Nx, Nproj);
+
+validProjection = false(1, Nproj);
+
+for k = 1:Nproj
+
+    filename = fullfile(files(k).folder, files(k).name);
+
+    try
+
+        img = imread(filename);
+
+        if size(img, 3) == 3
+            img = rgb2gray(img);
+        end
+
+        img = double(img);
+
+        % Verify dimensions
+        if size(img,1) ~= Ny || size(img,2) ~= Nx
+            error('Image dimensions do not match.');
+        end
+
+        % Extract horizontal line through center
+        sinogram(:,k) = img(y0,:)';
+
+        validProjection(k) = true;
+
+    catch ME
+
+        fprintf('Skipping unreadable image: %s\n', ...
+            files(k).name);
+        fprintf('Reason: %s\n', ME.message);
+
+    end
+
+end
+
+% Remove unreadable projections
+sinogram = sinogram(:,validProjection);
+angles = angles(validProjection);
+
+Nproj = length(angles);
+
+if Nproj < 2
+    error('Not enough readable projections.');
+end
+
+fprintf('Successfully loaded %d projections.\n', Nproj);
+
+%% Step 7: Display Full Sinogram (0-360 Degrees)
+
+figure;
+
+imagesc(angles, 1:Nx, sinogram);
 
 colormap gray;
 axis normal;
@@ -305,70 +413,91 @@ xlabel('Projection Angle (degrees)');
 ylabel('Detector Position (pixels)');
 title('Insect Head Sinogram (0-360 Degrees)');
 
-%% Select 0-178 Degrees for Filtered Back Projection
+%% Step 8: Select Angles for Reconstruction
 
-use180_2 = (angles2 >= 0) & (angles2 < 180);
+% Use 0-180 degrees for parallel-beam FBP
+use180 = (angles >= 0) & (angles < 180);
 
-theta2 = angles2(use180_2);
-projectionData2 = sinogram2(:, use180_2);
+theta = angles(use180);
+projectionData = sinogram(:,use180);
 
-NprojFBP2 = length(theta2);
+NprojFBP = length(theta);
 
-%% Apply Ram-Lak Filter - Insect Head
+if NprojFBP < 2
+    error('Not enough projections between 0 and 180 degrees.');
+end
 
-Nfft2 = 2^nextpow2(2 * Nx2);
+%% Step 9: Apply Ram-Lak Filter Manually
 
-freq2 = (0:Nfft2-1)';
-freq2(freq2 > Nfft2/2) = ...
-    freq2(freq2 > Nfft2/2) - Nfft2;
+% Zero-padding for FFT filtering
+Nfft = 2^nextpow2(2*Nx);
 
-rampFilter2 = abs(freq2) / Nfft2;
+% Frequency indices in FFT order
+freq = (0:Nfft-1)';
+freq(freq > Nfft/2) = freq(freq > Nfft/2)-Nfft;
 
-filteredSinogram2 = zeros(Nx2, NprojFBP2);
+% Ram-Lak frequency response
+rampFilter = abs(freq)/Nfft;
 
-for k = 1:NprojFBP2
+% Filtered projections
+filteredSinogram = zeros(Nx,NprojFBP);
 
-    projectionFFT2 = fft(projectionData2(:, k), Nfft2);
+for k = 1:NprojFBP
 
-    filteredFFT2 = projectionFFT2 .* rampFilter2;
+    % Fourier transform
+    projectionFFT = fft(projectionData(:,k),Nfft);
 
-    filteredProjection2 = real(ifft(filteredFFT2));
+    % Apply Ram-Lak filter
+    filteredFFT = projectionFFT .* rampFilter;
 
-    filteredSinogram2(:, k) = filteredProjection2(1:Nx2);
+    % Inverse Fourier transform
+    filteredProjection = real(ifft(filteredFFT));
+
+    % Keep original detector length
+    filteredSinogram(:,k) = filteredProjection(1:Nx);
 
 end
 
-%% Manual Back Projection - Insect Head
+%% Step 10: Manual Back Projection
 
-N2 = Nx2;
+% Reconstruction grid
+N = Nx;
 
-[x2, y2] = meshgrid((1:N2)-x02, (1:N2)-x02);
+[x,y] = meshgrid((1:N)-x0,(1:N)-x0);
 
-reconstructedInsect = zeros(N2, N2);
+% Initialize reconstructed image
+reconstructedInsect = zeros(N,N);
 
-detectorPositions2 = (1:Nx2) - x02;
+% Detector positions relative to rotation center
+detectorPositions = (1:Nx)-x0;
 
-for k = 1:NprojFBP2
+% Angular integration weights
+edges = [0; ...
+    (theta(1:end-1)+theta(2:end))/2; ...
+    180];
 
-    angle2 = deg2rad(theta2(k));
+weights = deg2rad(diff(edges));
 
-    t2 = x2*cos(angle2) + y2*sin(angle2);
+for k = 1:NprojFBP
 
-    backProjection2 = interp1( ...
-        detectorPositions2, ...
-        filteredSinogram2(:, k), ...
-        t2, 'linear', 0);
+    angle = deg2rad(theta(k));
 
-    reconstructedInsect = reconstructedInsect + backProjection2;
+    % Detector coordinate for every pixel
+    t = x*cos(angle)+y*sin(angle);
+
+    % Interpolate filtered projection
+    backProjection = interp1( ...
+        detectorPositions, ...
+        filteredSinogram(:,k), ...
+        t, 'linear', 0);
+
+    % Add weighted contribution
+    reconstructedInsect = reconstructedInsect + ...
+        backProjection*weights(k);
 
 end
 
-if NprojFBP2 > 1
-    deltaTheta2 = deg2rad(mean(diff(theta2)));
-    reconstructedInsect = reconstructedInsect * deltaTheta2;
-end
-
-%% Display Insect Head Reconstruction
+%% Step 11: Display Reconstructed Cross-Section
 
 figure;
 
@@ -380,15 +509,16 @@ colorbar;
 
 xlabel('X Position (pixels)');
 ylabel('Y Position (pixels)');
-title('Insect Head Cross-Section - Filtered Back Projection');
+title('Insect Head - Manual Filtered Back Projection');
 
-%% Display Insect Head Results Side by Side
+%% Step 12: Display Both Results Side by Side
 
-figure('Position', [100, 100, 1400, 600]);
+figure;
 
 subplot(1,2,1);
 
-imagesc(angles2, 1:Nx2, sinogram2);
+imagesc(angles,1:Nx,sinogram);
+
 colormap gray;
 axis normal;
 colorbar;
@@ -396,31 +526,21 @@ colorbar;
 xlim([0 360]);
 xticks(0:45:360);
 
-xlabel('Angle (degrees)');
-ylabel('Detector Position');
+xlabel('Projection Angle (degrees)');
+ylabel('Detector Position (pixels)');
 title('Insect Head Sinogram (0-360 Degrees)');
 
 subplot(1,2,2);
 
 imagesc(reconstructedInsect);
+
 colormap gray;
 axis image;
 colorbar;
 
-xlabel('X Position');
-ylabel('Y Position');
-title('Insect Head Reconstructed Slice');
-
-
-%% Exercise 3.
-
-
-%% Exercise 4.
-
-
-
-
-
+xlabel('X Position (pixels)');
+ylabel('Y Position (pixels)');
+title('Insect Head Reconstructed CT Slice');
 
 
 
