@@ -1,550 +1,224 @@
 %% BIOE420 Project 1: CT Image Reconstruction 
-% Group Members: Lillian Myers, Julie Karasik, Kenneth Missig, Katherine
-% Chan
+% Group Members: Julie Karasik, Gabrielle Zanga
 
-
-%% BIOE420 Project 1
-% Exercises 1 and 2
-% Manual Filtered Back Projection
 clear; clc; close all;
 
+
+scanner.DSD = 119.40;     % mm, source to detector
+scanner.DSO = 105.80;     % mm, source to rotation axis
+scanner.du  = 0.020;      % mm per detector pixel
+scanner.dir = -1;         % instructor's rotation direction
+scanner.nx  = 350;        % reconstructed image width
+scanner.ny  = 300;        % reconstructed image height
+scanner.dx  = 0.080;      % mm per reconstruction pixel
+scanner.dy  = 0.080;      % mm per reconstruction pixel
+scanner.filter = 'ram-lak';
+
+% If detector center is offset from the ideal midpoint, calibrate it here.
+% With 1000 detector pixels, geometric center is 500.5 (between pixels).
+% The assignment's (500,750) identifies the approximate slice location.
+
 %% =========================================================
-% EXERCISE 1: CRYSTAL DATASET
+% EXERCISE 1: CRYSTAL DATASET, 360 DEGREES
 % ==========================================================
-
-% Unzip crystal dataset
-unzip('Data_Crystal_360.zip', 'Crystal 360 Images');
-
-% Find all BMP files, including subfolders
-files = dir(fullfile('Crystal 360 Images', '**', '*.bmp'));
-
-if isempty(files)
-    error('No BMP images found for Crystal dataset.');
-end
-
-%% Sort images by projection angle
-
-angles = zeros(length(files), 1);
-
-for k = 1:length(files)
-
-    token = regexp(files(k).name, ...
-        '(\d+\.?\d*)\.bmp$', 'tokens');
-
-    if isempty(token)
-        error('Cannot extract angle from %s', files(k).name);
-    end
-
-    angles(k) = str2double(token{1}{1});
-
-end
-
-[angles, order] = sort(angles);
-files = files(order);
-
-% Keep all angles from 0 to 358 degrees
-use = (angles >= 0) & (angles < 360);
-
-angles = angles(use);
-files = files(use);
-
-%% Read first image
-
-img = imread(fullfile(files(1).folder, files(1).name));
-
-if size(img, 3) == 3
-    img = rgb2gray(img);
-end
-
-img = double(img);
-
-[Ny, Nx] = size(img);
-
-% Center position specified in assignment
-x0 = 500;
-y0 = 750;
-
-if x0 > Nx || y0 > Ny
-    error('Crystal center position exceeds image dimensions.');
-end
-
-%% Create Crystal Sinogram (0-358 degrees)
-
-Nproj = length(angles);
-sinogram = zeros(Nx, Nproj);
-
-for k = 1:Nproj
-
-    img = imread(fullfile(files(k).folder, files(k).name));
-
-    if size(img, 3) == 3
-        img = rgb2gray(img);
-    end
-
-    img = double(img);
-
-    % Extract horizontal line at y = 750
-    sinogram(:, k) = img(y0, :)';
-
-end
-
-%% Display Full Crystal Sinogram (0-360 degrees)
-
+[crystal360Sinogram, crystal360Angles] = loadProjectionLines( ...
+    'Data_Crystal_360.zip', 'Crystal 360 Images', '.bmp', 750, 0);
 figure;
-
-imagesc(angles, 1:Nx, sinogram);
-
-colormap gray;
-axis normal;
-colorbar;
-
-xlim([0 360]);
-xticks(0:45:360);
-
-xlabel('Projection Angle (degrees)');
-ylabel('Detector Position (pixels)');
-title('Crystal Sinogram (0-360 Degrees)');
-
-%% Select 0-178 Degrees for Filtered Back Projection
-
-% Parallel-beam reconstruction needs only 180 degrees
-use180 = (angles >= 0) & (angles < 180);
-
-theta = angles(use180);
-projectionData = sinogram(:, use180);
-
-NprojFBP = length(theta);
-
-%% Apply Ram-Lak Filter - Crystal
-
-Nfft = 2^nextpow2(2 * Nx);
-
-freq = (0:Nfft-1)';
-freq(freq > Nfft/2) = freq(freq > Nfft/2) - Nfft;
-
-rampFilter = abs(freq) / Nfft;
-
-filteredSinogram = zeros(Nx, NprojFBP);
-
-for k = 1:NprojFBP
-
-    projectionFFT = fft(projectionData(:, k), Nfft);
-
-    filteredFFT = projectionFFT .* rampFilter;
-
-    filteredProjection = real(ifft(filteredFFT));
-
-    filteredSinogram(:, k) = filteredProjection(1:Nx);
-
-end
-
-%% Manual Back Projection - Crystal
-
-N = Nx;
-
-[x, y] = meshgrid((1:N)-x0, (1:N)-x0);
-
-reconstructedCrystal = zeros(N, N);
-
-detectorPositions = (1:Nx) - x0;
-
-for k = 1:NprojFBP
-
-    angle = deg2rad(theta(k));
-
-    t = x*cos(angle) + y*sin(angle);
-
-    backProjection = interp1( ...
-        detectorPositions, ...
-        filteredSinogram(:, k), ...
-        t, 'linear', 0);
-
-    reconstructedCrystal = reconstructedCrystal + backProjection;
-
-end
-
-if NprojFBP > 1
-    deltaTheta = deg2rad(mean(diff(theta)));
-    reconstructedCrystal = reconstructedCrystal * deltaTheta;
-end
-
-%% Display Crystal Reconstruction
-
+showSinogram(crystal360Sinogram, crystal360Angles, ...
+    'Exercise 1: Crystal 360-Degree Sinogram');
+reconstructedCrystal360 = reconstructFanBeam2D( ...
+    crystal360Sinogram, crystal360Angles, scanner);
 figure;
+showReconstruction(reconstructedCrystal360, ...
+    'Exercise 1: Crystal 360-Degree Fan-Beam FBP');
 
-imagesc(reconstructedCrystal);
-
-colormap gray;
-axis image;
-colorbar;
-
-xlabel('X Position (pixels)');
-ylabel('Y Position (pixels)');
-title('Crystal Cross-Section - Filtered Back Projection');
-
-%% Display Crystal Results Side by Side
-
+%% =========================================================
+% EXERCISE 2: INSECT HEAD DATASET, 360 DEGREES
+% ==========================================================
+% For insect images, [] chooses the middle row automatically.
+[insectSinogram, insectAngles] = loadProjectionLines( ...
+    'Dataset_Insect_Head_360.zip', 'Insect Head Images', '.tif', [], 0);
 figure;
+showSinogram(insectSinogram, insectAngles, ...
+    'Exercise 2: Insect Head 360-Degree Sinogram');
+reconstructedInsect = reconstructFanBeam2D( ...
+    insectSinogram, insectAngles, scanner);
+figure;
+showReconstruction(reconstructedInsect, ...
+    'Exercise 2: Insect Head Fan-Beam FBP');
 
-subplot(1,2,1);
-
-imagesc(angles, 1:Nx, sinogram);
-colormap gray;
-axis normal;
-colorbar;
-
-xlim([0 360]);
-xticks(0:45:360);
-
-xlabel('Angle (degrees)');
-ylabel('Detector Position');
-title('Crystal Sinogram (0-360 Degrees)');
-
-subplot(1,2,2);
-
-imagesc(reconstructedCrystal);
-colormap gray;
-axis image;
-colorbar;
-
-xlabel('X Position');
-ylabel('Y Position');
-title('Crystal Reconstructed Slice');
+%% =========================================================
+% EXERCISE 3: CRYSTAL DATASET, 180 DEGREES
+% ==========================================================
+% Instructor requires rotating the raw images 90 degrees.
+% +1 = 90 degrees counterclockwise; set -1 if raw image requires clockwise.
+crystal180Rotation = 1;
+[crystal180Sinogram, crystal180Angles] = loadProjectionLines( ...
+    'Dataset_Crystal_180.zip', 'Crystal_180_Images', '.bmp', ...
+    750, crystal180Rotation);
+figure;
+showSinogram(crystal180Sinogram, crystal180Angles, ...
+    'Exercise 3: Crystal 180-Degree Sinogram');
+reconstructedCrystal180 = reconstructFanBeam2D( ...
+    crystal180Sinogram, crystal180Angles, scanner);
+figure;
+showReconstruction(reconstructedCrystal180, ...
+    'Exercise 3: Crystal 180-Degree Fan-Beam FBP (Limited Angle)');
 
 
-%% Step 1: Load Insect Head Dataset
-
-zipFile = 'Dataset_Insect_Head_360.zip';
-outputFolder = 'Insect Head Images';
-
-% Only unzip if the folder does not already exist
-if ~isfolder(outputFolder)
-    unzip(zipFile, outputFolder);
-end
-
-% Find TIFF images in all subfolders
-files = [ ...
-    dir(fullfile(outputFolder, '**', '*.tif')); ...
-    dir(fullfile(outputFolder, '**', '*.tiff'))];
-
-if isempty(files)
-    error('No TIFF images found. Check the dataset folder.');
-end
-
-fprintf('Found %d TIFF files.\n', length(files));
-
-%% Step 2: Extract Angles from Filenames
-
-angles = [];
-validFiles = files([]);
-
-for k = 1:length(files)
-
-    name = files(k).name;
-
-    % Handles filenames such as:
-    % 202009231201PM49_ -0.0.tif
-    % 202009231202PM05_ 2.0 - Copy.tif
-    % 202009231202PM05_ 4.0.tif
-
-    token = regexp(name, ...
-        '_\s*([+-]?\d+\.?\d*)\s*(?:-\s*Copy)?\.tiff?$', ...
-        'tokens', 'once', 'ignorecase');
-
-    if isempty(token)
-        fprintf('Skipping invalid filename: %s\n', name);
-        continue;
-    end
-
-    angle = str2double(token{1});
-
-    if ~isfinite(angle)
-        fprintf('Skipping invalid angle: %s\n', name);
-        continue;
-    end
-
-    % Convert negative angles to 0-360 degrees
-    angle = mod(angle, 360);
-
-    angles(end+1, 1) = angle;
-    validFiles(end+1, 1) = files(k);
-
-end
-
-if isempty(validFiles)
-    error('No valid projection filenames found.');
-end
-
-%% Step 3: Sort Images and Remove Duplicate Angles
-
-[angles, order] = sort(angles);
-files = validFiles(order);
-
-% Prefer original files over "- Copy" files
-isCopy = contains({files.name}, '- Copy', 'IgnoreCase', true);
-[~, priorityOrder] = sort(isCopy);
-
-angles = angles(priorityOrder);
-files = files(priorityOrder);
-
-% Remove duplicate angles
-[angles, uniqueIdx] = unique(angles, 'stable');
-files = files(uniqueIdx);
-
-% Sort again by angle
-[angles, order] = sort(angles);
-files = files(order);
-
-fprintf('Found %d unique projection angles.\n', length(angles));
-fprintf('Angle range: %.1f to %.1f degrees.\n', ...
-    min(angles), max(angles));
-
-%% Step 4: Find First Readable Image
-
-firstValid = [];
-
-for k = 1:length(files)
-
-    try
-        img = imread(fullfile(files(k).folder, files(k).name));
-
-        if size(img, 3) == 3
-            img = rgb2gray(img);
+%% =========================================================
+% LOCAL FUNCTIONS (MUST BE AT END OF THIS SCRIPT)
+% ==========================================================
+function [sino, angles] = loadProjectionLines(zipName, folder, extension, sliceRow, rotateCount)
+    if ~isfolder(folder)
+        if ~isfile(zipName)
+            error('Cannot find %s. Put the ZIP in MATLAB Current Folder.',zipName);
         end
-
-        firstValid = k;
-        break;
-
-    catch ME
-        fprintf('Cannot read: %s\n', files(k).name);
-        fprintf('Reason: %s\n', ME.message);
+        unzip(zipName,folder);
+    end
+    if strcmpi(extension,'.tif')
+        files = [dir(fullfile(folder,'**','*.tif')); ...
+                 dir(fullfile(folder,'**','*.tiff'))];
+    else
+        files = dir(fullfile(folder,'**',['*' extension]));
+    end
+    if isempty(files)
+        error('No projection images found under %s.',folder);
     end
 
+    % Read angle immediately before extension, ignoring optional - Copy.
+    anglesAll = nan(numel(files),1);
+    for k=1:numel(files)
+        tok = regexp(files(k).name, ...
+            '([+-]?\d+(?:\.\d+)?)\s*(?:-\s*Copy)?\.(?:bmp|tiff?)$', ...
+            'tokens','once','ignorecase');
+        if ~isempty(tok)
+            anglesAll(k) = mod(str2double(tok{1}),360);
+        end
+    end
+    keep = isfinite(anglesAll);
+    files = files(keep); anglesAll = anglesAll(keep);
+    if isempty(files), error('Could not parse projection angles in %s',folder); end
+
+    % Prefer original files to Windows-generated "- Copy" files.
+    isCopy = contains({files.name},'- Copy','IgnoreCase',true);
+    [~,ord] = sortrows([anglesAll, double(isCopy(:))],[1 2]);
+    files = files(ord); anglesAll = anglesAll(ord);
+    [angles,idx] = unique(anglesAll,'stable');
+    files = files(idx);
+    angles = angles(:);
+
+    first = imread(fullfile(files(1).folder,files(1).name));
+    if size(first,3)==3, first=rgb2gray(first); end
+    first = rot90(first,rotateCount);
+    [nRows,nDetectors] = size(first);
+    if isempty(sliceRow), sliceRow=round(nRows/2); end
+    if sliceRow<1 || sliceRow>nRows
+        error('Slice row %d is outside the rotated image (height %d).',sliceRow,nRows);
+    end
+    sino = zeros(nDetectors,numel(angles));
+    for k=1:numel(angles)
+        im = imread(fullfile(files(k).folder,files(k).name));
+        if size(im,3)==3, im=rgb2gray(im); end
+        im = rot90(im,rotateCount);
+        if size(im,1)~=nRows || size(im,2)~=nDetectors
+            error('Inconsistent image size: %s',files(k).name);
+        end
+        sino(:,k)=double(im(sliceRow,:)).';
+    end
+    fprintf('%s: %d views, %g to %g deg, %d detectors, row %d, rot90=%d\n', ...
+        folder,numel(angles),min(angles),max(angles),nDetectors,sliceRow,rotateCount);
+    if any(diff(angles)>2.1)
+        warning('%s has angle gaps larger than 2 degrees.',folder);
+    end
 end
 
-if isempty(firstValid)
-    error('No readable TIFF images found.');
-end
+function recon = reconstructFanBeam2D(sino, angles, cfg)
+    % Fan-beam FBP central-slice adaptation of the instructor's FDK code.
+    % Assumes line-integral projections and a FLAT detector.
+    % If image values are raw intensities, -log(I/I0) preprocessing may be
+    % required before reconstruction; I0 calibration is not provided here.
+    [nu,nViews] = size(sino);
+    angles = angles(:);
+    if numel(angles)~=nViews, error('Angles / sinogram mismatch.'); end
+    if nViews<2, error('At least two projections are needed.'); end
 
-img = double(img);
+    du=cfg.du; DSD=cfg.DSD; DSO=cfg.DSO;
+    % Physical detector positions (mm) about panel midpoint.
+    detectorU = ((1:nu)'-(nu+1)/2)*du;
+    % Instructor's detector pre-weighting, evaluated at central slice v=0.
+    preweight = DSD./sqrt(DSD^2+detectorU.^2);
+    weighted = sino.*repmat(preweight,1,nViews);
 
-[Ny, Nx] = size(img);
-
-fprintf('Image dimensions: %d x %d pixels.\n', Ny, Nx);
-
-%% Step 5: Define Cross-Section Position
-
-% Use center of insect head image
-x0 = round(Nx/2);
-y0 = round(Ny/2);
-
-fprintf('Selected center: (%d, %d)\n', x0, y0);
-
-%% Step 6: Create Sinogram
-
-Nproj = length(angles);
-
-% Rows = detector positions
-% Columns = projection angles
-sinogram = zeros(Nx, Nproj);
-
-validProjection = false(1, Nproj);
-
-for k = 1:Nproj
-
-    filename = fullfile(files(k).folder, files(k).name);
-
-    try
-
-        img = imread(filename);
-
-        if size(img, 3) == 3
-            img = rgb2gray(img);
-        end
-
-        img = double(img);
-
-        % Verify dimensions
-        if size(img,1) ~= Ny || size(img,2) ~= Nx
-            error('Image dimensions do not match.');
-        end
-
-        % Extract horizontal line through center
-        sinogram(:,k) = img(y0,:)';
-
-        validProjection(k) = true;
-
-    catch ME
-
-        fprintf('Skipping unreadable image: %s\n', ...
-            files(k).name);
-        fprintf('Reason: %s\n', ME.message);
-
+    % Professor's spatial-domain ramp kernel -> FFT frequency response.
+    % Padding and zero-centering avoid wraparound at the detector edges.
+    L = 2^nextpow2(2*nu);
+    nn = (-L/2:L/2-1)';
+    kernel = zeros(L,1);
+    kernel(L/2+1) = 1/4;
+    odd = mod(abs(nn),2)==1;
+    kernel(odd) = -1./(pi*nn(odd)).^2;
+    H = real(fft(ifftshift(kernel)))*2;
+    H = max(H,0);  % Ram-Lak, no extra Hann/Hamming apodization
+    padStart = L/2-floor(nu/2)+1;
+    filtered = zeros(nu,nViews);
+    for k=1:nViews
+        padded = zeros(L,1);
+        padded(padStart:padStart+nu-1)=weighted(:,k);
+        fp = real(ifft(fft(padded).*H));
+        % Same detector-spacing and geometric scaling form as instructor.
+        filtered(:,k)=fp(padStart:padStart+nu-1) ...
+            /(2*du)*(DSD/DSO);
     end
 
+    % Voxel grid (mm), mirroring ParamSettingr16F.m.
+    xs=((1:cfg.nx)-(cfg.nx+1)/2)*cfg.dx;
+    ys=((1:cfg.ny)-(cfg.ny+1)/2)*cfg.dy;
+    [xx,yy]=meshgrid(xs,ys);
+    recon=zeros(cfg.ny,cfg.nx);
+
+    % Angular integration. Actual 180-degree fan-beam scan is incomplete:
+    % no missing angles are synthesized, and Parker weighting is NOT used.
+    if max(angles)-min(angles)>270
+        % Circular quadrature including wraparound for complete 360 scan.
+        prev=[angles(end)-360;angles(1:end-1)];
+        next=[angles(2:end);angles(1)+360];
+        weights=deg2rad((next-prev)/2)/2;
+    else
+        % Limited-angle integral over the acquired range (2-degree nominal).
+        step=median(diff(angles));
+        left=[angles(1)-step/2; (angles(1:end-1)+angles(2:end))/2];
+        right=[(angles(1:end-1)+angles(2:end))/2; angles(end)+step/2];
+        weights=deg2rad(right-left)/2;
+        warning(['This 180-degree fan-beam acquisition is an incomplete ', ...
+                 'short scan. Strong streak artifacts are expected.']);
+    end
+
+    for k=1:nViews
+        % Match instructor's backprojection_line.m coordinate convention.
+        a=deg2rad(angles(k)*cfg.dir);
+        rx=xx*cos(a-pi/2)+yy*sin(a-pi/2);
+        ry=-xx*sin(a-pi/2)+yy*cos(a-pi/2);
+        denominator=ry+DSO;
+        u=DSD*rx./denominator;
+        weight=(DSO./denominator).^2;
+        % Professor maps projected coordinate to detector index with a
+        % negative detector axis. Use interpolation with zero outside FOV.
+        sample=interp1(detectorU,filtered(:,k),-u,'linear',0);
+        sample(~isfinite(sample))=0;
+        recon=recon+weight.*sample.*weights(k);
+    end
 end
 
-% Remove unreadable projections
-sinogram = sinogram(:,validProjection);
-angles = angles(validProjection);
-
-Nproj = length(angles);
-
-if Nproj < 2
-    error('Not enough readable projections.');
+function showSinogram(sino,angles,ttl)
+    imagesc(angles,1:size(sino,1),sino);
+    colormap(gray); colorbar; axis normal;
+    xlabel('Projection Angle (degrees)');
+    ylabel('Detector Position (pixels)'); title(ttl);
 end
 
-fprintf('Successfully loaded %d projections.\n', Nproj);
-
-%% Step 7: Display Full Sinogram (0-360 Degrees)
-
-figure;
-
-imagesc(angles, 1:Nx, sinogram);
-
-colormap gray;
-axis normal;
-colorbar;
-
-xlim([0 360]);
-xticks(0:45:360);
-
-xlabel('Projection Angle (degrees)');
-ylabel('Detector Position (pixels)');
-title('Insect Head Sinogram (0-360 Degrees)');
-
-%% Step 8: Select Angles for Reconstruction
-
-% Use 0-180 degrees for parallel-beam FBP
-use180 = (angles >= 0) & (angles < 180);
-
-theta = angles(use180);
-projectionData = sinogram(:,use180);
-
-NprojFBP = length(theta);
-
-if NprojFBP < 2
-    error('Not enough projections between 0 and 180 degrees.');
+function showReconstruction(img,ttl)
+    imagesc(img); colormap(gray); axis image; colorbar;
+    xlabel('X Position (pixels)'); ylabel('Y Position (pixels)');
+    title(ttl);
 end
-
-%% Step 9: Apply Ram-Lak Filter Manually
-
-% Zero-padding for FFT filtering
-Nfft = 2^nextpow2(2*Nx);
-
-% Frequency indices in FFT order
-freq = (0:Nfft-1)';
-freq(freq > Nfft/2) = freq(freq > Nfft/2)-Nfft;
-
-% Ram-Lak frequency response
-rampFilter = abs(freq)/Nfft;
-
-% Filtered projections
-filteredSinogram = zeros(Nx,NprojFBP);
-
-for k = 1:NprojFBP
-
-    % Fourier transform
-    projectionFFT = fft(projectionData(:,k),Nfft);
-
-    % Apply Ram-Lak filter
-    filteredFFT = projectionFFT .* rampFilter;
-
-    % Inverse Fourier transform
-    filteredProjection = real(ifft(filteredFFT));
-
-    % Keep original detector length
-    filteredSinogram(:,k) = filteredProjection(1:Nx);
-
-end
-
-%% Step 10: Manual Back Projection
-
-% Reconstruction grid
-N = Nx;
-
-[x,y] = meshgrid((1:N)-x0,(1:N)-x0);
-
-% Initialize reconstructed image
-reconstructedInsect = zeros(N,N);
-
-% Detector positions relative to rotation center
-detectorPositions = (1:Nx)-x0;
-
-% Angular integration weights
-edges = [0; ...
-    (theta(1:end-1)+theta(2:end))/2; ...
-    180];
-
-weights = deg2rad(diff(edges));
-
-for k = 1:NprojFBP
-
-    angle = deg2rad(theta(k));
-
-    % Detector coordinate for every pixel
-    t = x*cos(angle)+y*sin(angle);
-
-    % Interpolate filtered projection
-    backProjection = interp1( ...
-        detectorPositions, ...
-        filteredSinogram(:,k), ...
-        t, 'linear', 0);
-
-    % Add weighted contribution
-    reconstructedInsect = reconstructedInsect + ...
-        backProjection*weights(k);
-
-end
-
-%% Step 11: Display Reconstructed Cross-Section
-
-figure;
-
-imagesc(reconstructedInsect);
-
-colormap gray;
-axis image;
-colorbar;
-
-xlabel('X Position (pixels)');
-ylabel('Y Position (pixels)');
-title('Insect Head - Manual Filtered Back Projection');
-
-%% Step 12: Display Both Results Side by Side
-
-figure;
-
-subplot(1,2,1);
-
-imagesc(angles,1:Nx,sinogram);
-
-colormap gray;
-axis normal;
-colorbar;
-
-xlim([0 360]);
-xticks(0:45:360);
-
-xlabel('Projection Angle (degrees)');
-ylabel('Detector Position (pixels)');
-title('Insect Head Sinogram (0-360 Degrees)');
-
-subplot(1,2,2);
-
-imagesc(reconstructedInsect);
-
-colormap gray;
-axis image;
-colorbar;
-
-xlabel('X Position (pixels)');
-ylabel('Y Position (pixels)');
-title('Insect Head Reconstructed CT Slice');
-
-
-
-
-
-
-
