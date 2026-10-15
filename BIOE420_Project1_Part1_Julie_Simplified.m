@@ -6,27 +6,27 @@ clear; clc; close all;
 %% Settings
 sourceToDetector = 119.40;    % mm
 sourceToCenter = 105.80;      % mm
-pixelSpacing = 0.020;        % mm per detector pixel
-imageSpacing = 0.080;        % mm per reconstructed pixel
-imageWidth = 350;            % reconstructed image columns
-imageHeight = 300;           % reconstructed image rows
-rotationDirection = -1;      % scanner rotation convention
-crystalRow = 750;            % row to reconstruct
-insectRow = 0;               % 0 means use the middle image row
-crystal180Rotation = 1;      % 1 = rotate 90 degrees counterclockwise
+pixelConvert = 0.020;        % mm per detector pixel conversrion 
+imageConvert = 0.080;        % mm per reconstructed pixel conversion
+imageX = 350;              % reconstructed image width
+imageY = 300;              % reconstructed image height
+rotDir = -1;               % scanner rotation direction
+crystalY = 750;            % row to reconstruct
+insectY = 0;               % use the middle image row
+crys180Rot = 1;            % 1 = rotate 90 degrees counterclockwise
 
 %% Exercise 1: Crystal 360
 disp('Select Crystal 360 Folder')
 folder360 = uigetdir(pwd);
 
 [crystal360Sino, crystal360Angles] = loadImages( ...
-    folder360, '.bmp', crystalRow, 0);
+    folder360, '.bmp', crystalY, 0);
 
 showSino(crystal360Sino, crystal360Angles, 'Crystal 360 Sinogram');
 
 crystal360Image = fbp(crystal360Sino, crystal360Angles, ...
-    sourceToDetector, sourceToCenter, pixelSpacing, imageSpacing, ...
-    imageWidth, imageHeight, rotationDirection);
+    sourceToDetector, sourceToCenter, pixelConvert, imageConvert, ...
+    imageX, imageY, rotDir);
 
 showImage(crystal360Image, 'Crystal 360 Reconstruction');
 
@@ -35,12 +35,12 @@ disp('Select Insect Head Folder')
 folderInsect = uigetdir(pwd);
 
 [insectSino, insectAngles] = loadImages( ...
-    folderInsect, '.tif', insectRow, 0);
+    folderInsect, '.tif', insectY, 0);
 showSino(insectSino, insectAngles, 'Insect Head Sinogram');
 
 insectImage = fbp(insectSino, insectAngles, ...
-    sourceToDetector, sourceToCenter, pixelSpacing, imageSpacing, ...
-    imageWidth, imageHeight, rotationDirection);
+    sourceToDetector, sourceToCenter, pixelConvert, imageConvert, ...
+    imageX, imageY, rotDir);
 
 showImage(insectImage, 'Insect Head Reconstruction');
 
@@ -49,13 +49,13 @@ disp('Select Crystal 180 Folder')
 folderCrystal180 = uigetdir(pwd);
 
 [crystal180Sino, crystal180Angles] = loadImages( ...
-    folderCrystal180, '.bmp', crystalRow, crystal180Rotation);
+    folderCrystal180, '.bmp', crystalY, crys180Rot);
 
 showSino(crystal180Sino, crystal180Angles, 'Crystal 180 Sinogram');
 
 crystal180Image = fbp(crystal180Sino, crystal180Angles, ...
-    sourceToDetector, sourceToCenter, pixelSpacing, imageSpacing, ...
-    imageWidth, imageHeight, rotationDirection);
+    sourceToDetector, sourceToCenter, pixelConvert, imageConvert, ...
+    imageX, imageY, rotDir);
 
 showImage(crystal180Image, 'Crystal 180 Reconstruction');
 
@@ -63,27 +63,26 @@ showImage(crystal180Image, 'Crystal 180 Reconstruction');
 function [sinogram, angles] = loadImages(folder, extension, sliceRow, turns)
 
     files = dir(fullfile(folder, ['*' extension]));
-    if isempty(files)
-        error('No %s images found in folder: %s', extension, folder);
-    end
-
-    % Read the projection angle from each filename.
-    % Example: Crystal_24.bmp corresponds to 24 degrees.
+   
+    % Read the projection angle from each filename
     angles = zeros(length(files), 1);
     for k = 1:length(files)
         filename = files(k).name;
         part = regexp(filename, '([0-9]+\.?[0-9]*)\.[^.]+$', 'tokens', 'once');
+        
+        %When angle cannot be found due to name format
         if isempty(part)
-            error('Cannot read angle from filename: %s', filename);
+            disp('Remove or rename file named below from dataset')
+            error('Cannot read angle from filename: %s', filename); 
         end
         angles(k) = str2double(part{1});
     end
 
-    % Sort projections into increasing angle order.
+    % Sort projections into increasing angle order
     [angles, order] = sort(angles);
     files = files(order);
 
-    % Remove a duplicate image acquired at exactly 360 degrees.
+    % Remove a duplicate image at 360 degrees ( 0=360 )
     if angles(end) == 360
         angles(end) = [];
         files(end) = [];
@@ -130,14 +129,14 @@ function image = fbp(sinogram, angles, sourceToDetector, ...
         error('Sinogram and angles do not match.');
     end
 
-    % Physical detector coordinates (mm).
+    % Physical detector coordinates
     detector = ((1:detectorCount)' - (detectorCount+1)/2) * pixelSpacing;
 
-    % Fan-beam weighting before filtering.
+    % Fan-beam weighting before filtering
     weight = sourceToDetector ./ sqrt(sourceToDetector^2 + detector.^2);
     weightedSino = sinogram .* weight;
 
-    % Build the Ram-Lak filter in the frequency domain.
+    % Build the Ram-Lak filter in the frequency domain
     fftLength = 2^nextpow2(2*detectorCount);
     n = (-fftLength/2:fftLength/2-1)';
     ramp = zeros(fftLength, 1);
@@ -150,7 +149,7 @@ function image = fbp(sinogram, angles, sourceToDetector, ...
     filter = real(fft(ifftshift(ramp))) * 2;
     filter = max(filter, 0);
 
-    % Filter each projection separately.
+    % Filter each projection separately
     startIndex = fftLength/2 - floor(detectorCount/2) + 1;
     filteredSino = zeros(detectorCount, viewCount);
     for k = 1:viewCount
@@ -161,17 +160,17 @@ function image = fbp(sinogram, angles, sourceToDetector, ...
             / (2*pixelSpacing) * (sourceToDetector/sourceToCenter);
     end
 
-    % Create the reconstruction grid (mm).
+    % Create the reconstruction grid (mm)
     x = ((1:imageWidth) - (imageWidth+1)/2) * imageSpacing;
     y = ((1:imageHeight) - (imageHeight+1)/2) * imageSpacing;
     [X, Y] = meshgrid(x, y);
     image = zeros(imageHeight, imageWidth);
 
-    % Angular weight for equally spaced projections.
+    % Angular weight for equally spaced projections
     angleStep = angles(2) - angles(1);
     angleWeight = (angleStep*pi/180)/2;
 
-    % Back-project filtered projections.
+    % Back-project filtered projections
     for k = 1:viewCount
         theta = angles(k) * rotationDirection * pi/180;
         rotatedX = X*cos(theta-pi/2) + Y*sin(theta-pi/2);
